@@ -1,93 +1,106 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# CSV-to-JSON Transformer
-# Handles: custom delimiters, quoted fields, nested headers, edge cases
+usage() {
+  cat <<'EOF' >&2
+Usage: run.sh [INPUT_FILE] [OPTIONS]
+
+Converts CSV to JSON. Reads from stdin if no file specified.
+
+Options:
+  --delimiter CHAR   Field delimiter (default: ,)
+  --nested           Treat dot-notation headers as nested objects
+  --array            Output as array of arrays instead of objects
+  --pretty           Pretty-print JSON (default: true)
+  --compact          Compact JSON (no whitespace)
+  --help             Show this help message
+EOF
+  exit 0
+}
 
 DELIMITER=","
 NESTED=false
-PRETTY=false
-NO_HEADER=false
+ARRAY_MODE=false
+COMPACT=false
 INPUT_FILE=""
 
-# Parse arguments
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --delimiter=*) DELIMITER="${1#*=}"; shift ;;
+    --help) usage ;;
+    --delimiter) DELIMITER="$2"; shift 2 ;;
     --nested) NESTED=true; shift ;;
-    --pretty) PRETTY=true; shift ;;
-    --no-header) NO_HEADER=true; shift ;;
-    -*) echo "Unknown option: $1" >&2; exit 1 ;;
-    *) INPUT_FILE="$1"; shift ;;
+    --array) ARRAY_MODE=true; shift ;;
+    --compact) COMPACT=true; shift ;;
+    --pretty) shift ;;
+    -*)
+      echo "Error: Unknown option '$1'" >&2
+      exit 1
+      ;;
+    *)
+      INPUT_FILE="$1"
+      shift
+      ;;
   esac
 done
 
-# Use Python for robust CSV parsing (available on macOS/Linux)
+if [[ -n "$INPUT_FILE" ]]; then
+  if [[ ! -f "$INPUT_FILE" ]]; then
+    echo "Error: File not found: $INPUT_FILE" >&2
+    exit 1
+  fi
+  INPUT=$(cat "$INPUT_FILE")
+else
+  INPUT=$(cat)
+fi
+
+if [[ -z "$INPUT" ]]; then
+  echo "Error: No input provided" >&2
+  exit 1
+fi
+
 python3 -c "
-import csv
-import json
-import sys
-import io
+import csv, json, sys, io
 
-delimiter = '''${DELIMITER}'''
-nested = '${NESTED}' == 'true'
-pretty = '${PRETTY}' == 'true'
-no_header = '${NO_HEADER}' == 'true'
-input_file = '${INPUT_FILE}'
+input_data = sys.stdin.read()
+delimiter = '$DELIMITER'
+nested = $([[ "$NESTED" = true ]] && echo 'True' || echo 'False')
+array_mode = $([[ "$ARRAY_MODE" = true ]] && echo 'True' || echo 'False')
+compact = $([[ "$COMPACT" = true ]] && echo 'True' || echo 'False')
 
-def set_nested(obj, key_path, value):
-    keys = key_path.split('.')
-    current = obj
-    for k in keys[:-1]:
-        if k not in current:
-            current[k] = {}
-        current = current[k]
-    current[keys[-1]] = value
+reader = csv.reader(io.StringIO(input_data), delimiter=delimiter)
+rows = list(reader)
 
-def process_value(val):
-    if val == '':
-        return None
-    return val
+if not rows:
+    print('[]')
+    sys.exit(0)
 
-try:
-    if input_file:
-        f = open(input_file, 'r', encoding='utf-8-sig')
+headers = rows[0]
+data_rows = rows[1:]
+
+def set_nested(obj, keys, value):
+    for key in keys[:-1]:
+        if key not in obj:
+            obj[key] = {}
+        obj = obj[key]
+    obj[keys[-1]] = value
+
+result = []
+for row in data_rows:
+    if array_mode:
+        result.append(row)
     else:
-        f = io.TextIOWrapper(sys.stdin.buffer, encoding='utf-8-sig')
-    
-    reader = csv.reader(f, delimiter=delimiter)
-    rows = list(reader)
-    f.close() if input_file else None
-    
-    if not rows:
-        print('[]')
-        sys.exit(0)
-    
-    if no_header:
-        headers = [str(i) for i in range(len(rows[0]))]
-        data_rows = rows
-    else:
-        headers = [h.strip() for h in rows[0]]
-        data_rows = rows[1:]
-    
-    if not data_rows:
-        print('[]')
-        sys.exit(0)
-    
-    result = []
-    for row in data_rows:
         obj = {}
         for i, header in enumerate(headers):
-            val = process_value(row[i]) if i < len(row) else None
+            val = row[i] if i < len(row) else ''
             if nested and '.' in header:
-                set_nested(obj, header, val)
+                keys = header.split('.')
+                set_nested(obj, keys, val)
             else:
                 obj[header] = val
         result.append(obj)
-    
-    indent = 2 if pretty else None
-    print(json.dumps(result, indent=indent, ensure_ascii=False))
-except Exception as e:
-    print(f'Error: {e}', file=sys.stderr)
-    sys.exit(1)
-"
+
+if compact:
+    print(json.dumps(result, separators=(',', ':')))
+else:
+    print(json.dumps(result, indent=2))
+" <<< "$INPUT"
