@@ -1,70 +1,79 @@
 ---
 name: csv-to-json
-description: Convert CSV files to JSON with support for custom delimiters, quoted fields, and nested headers via dot notation.
+description: Transform CSV files to JSON with support for custom delimiters, quoted fields, nested headers, and streaming.
 version: 0.1.0
 license: Apache-2.0
 ---
 
-# csv-to-json
+# CSV-to-JSON Transformer
 
-Converts CSV data to JSON arrays or objects, handling edge cases like quoted fields, custom delimiters, and nested headers using dot notation.
+Convert CSV data to JSON output, handling real-world edge cases that simple parsers miss.
 
-## Purpose
+## When to Use
 
-CSV-to-JSON conversion seems simple until you hit real-world data: fields with commas inside quotes, tabs as delimiters, headers like `address.city` that should become nested objects. This skill handles all of that with a pure awk implementation.
-
-## Contract
-
-- Accepts CSV via stdin or file argument
-- Outputs a JSON array of objects to stdout
-- Headers from the first row become object keys
-- Dot-notation headers (e.g., `user.name`) produce nested objects
-- Quoted fields (double-quote) are handled correctly, including embedded commas
-- Custom delimiters via `--delimiter`
-- Exit 0 on success (last stdout line: `OK: converted N rows`)
-- Exit 1 on runtime error (stderr: `ERROR: <description>`)
-- Exit 2 on invalid input/usage (stderr: `ERROR: <description>`)
+Use this skill when the user wants to convert CSV files to JSON format, especially when:
+- The CSV uses non-comma delimiters (tabs, semicolons, pipes)
+- Fields contain quoted values with embedded delimiters or newlines
+- Headers use dot notation that should become nested JSON objects
+- The file is large and needs streaming/line-by-line processing
 
 ## Usage
 
 ```bash
-# Convert a CSV file
-./scripts/run.sh data.csv
-# Output: [{"name":"Alice","age":"30"},{"name":"Bob","age":"25"}]
-# OK: converted 2 rows
+# Basic conversion (reads stdin or file, writes to stdout)
+./scripts/run.sh input.csv
 
-# Convert from stdin with tab delimiter
-cat data.tsv | ./scripts/run.sh --delimiter '\t'
+# Custom delimiter
+./scripts/run.sh input.tsv --delimiter=$'\t'
 
-# Convert with nested headers
-echo 'user.name,user.email,role
-Alice,alice@example.com,admin' | ./scripts/run.sh
-# Output: [{"user":{"name":"Alice","email":"alice@example.com"},"role":"admin"}]
-# OK: converted 1 rows
+# Pipe from stdin
+cat data.csv | ./scripts/run.sh
+
+# Nested headers
+./scripts/run.sh --nested input.csv
+
+# Pretty print
+./scripts/run.sh --pretty input.csv
 ```
 
-## Arguments and Options
+## Inputs
 
-| Flag | Required | Default | Description |
-|------|----------|---------|-------------|
-| FILE | No | stdin | Path to CSV file to convert |
-| --delimiter | No | `,` | Field delimiter character |
-| --no-header | No | false | Treat first row as data, use col0, col1... as keys |
-| --pretty | No | false | Pretty-print JSON output |
-| --help | No | - | Show usage information |
-| --validate | No | - | Run self-check and report pass/fail |
+| Argument | Required | Description |
+|----------|----------|-------------|
+| FILE | No | Path to CSV file. If omitted, reads stdin. |
+| --delimiter=CHAR | No | Field delimiter (default: ,) |
+| --nested | No | Expand dot-notation headers into nested objects |
+| --pretty | No | Pretty-print JSON output |
+| --no-header | No | Treat first row as data, use numeric keys |
 
-## Exit Codes
+## Outputs
 
-| Code | Meaning |
-|------|---------|
-| 0 | Success |
-| 1 | Runtime error (e.g., malformed CSV) |
-| 2 | Invalid input / usage error |
+- JSON array written to stdout (one object per CSV row)
+- Exit code 0 on success, 1 on error
+- Errors written to stderr
 
-## Validation
+## Edge Cases Handled
 
-After running, an agent can verify:
-1. Output is valid JSON (pipe through `python3 -m json.tool` or `jq .`)
-2. The last line of stderr contains `OK: converted N rows` where N matches expected row count
-3. Run `./scripts/validate.sh` for a built-in self-check
+- Quoted fields containing the delimiter character
+- Quoted fields containing newlines
+- Escaped quotes (double-quote escaping per RFC 4180)
+- Empty fields become null in JSON
+- Trailing commas / inconsistent column counts
+- BOM (byte order mark) stripping
+- CRLF and LF line endings
+
+## Limitations
+
+- Does not validate JSON Schema on output
+- Nested mode only supports dot notation (not bracket notation)
+- Memory-efficient but not truly streaming (buffers current record)
+
+## Verification
+
+Run the test suite to verify correct behavior:
+
+```bash
+./scripts/test.sh
+```
+
+All tests should pass with 0 failures.
